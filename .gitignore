@@ -1,0 +1,55 @@
+# Node dependencies
+node_modules/
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+
+# Runtime data
+pids
+*.pid
+*.seed
+*.pid.lock
+
+# Build output
+dist/
+build/
+.cache/
+.out/
+.next/
+.nuxt/
+.docusaurus/
+
+# TypeScript and build caches
+*.tsbuildinfo
+.rpt2_cache/
+.rts2_cache_cjs/
+.rts2_cache_es/
+.rts2_cache_umd/
+
+# Optional caches
+.npm
+.eslintcache
+.stylelintcache
+.yarn-integrity
+
+# dotenv files
+.env
+.env.*
+
+# OS, editor, and IDE files
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Package manager lock files (optional)
+# Uncomment only if you do not want to commit lock files
+# package-lock.json
+# yarn.lock
+# pnpm-lock.yaml
