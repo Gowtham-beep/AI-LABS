@@ -31,6 +31,10 @@ const llmClient = getLLMClient(provider);
 const concurrency = parseInt(process.env.WORKER_CONCURRENCY || '5', 10);
 
 let activeJobCount = 0;
+// We use a Set as the single source of truth for active jobs to ensure
+// we never double-increment or double-decrement for the same job ID.
+const activeJobIds = new Set<string>();
+
 const logsDir = path.join(process.cwd(), 'logs');
 if (!fs.existsSync(logsDir)) {
   fs.mkdirSync(logsDir, { recursive: true });
@@ -44,7 +48,7 @@ function logJob(jobId: string | undefined, status: string, latencyMs: number | n
     latencyMs,
     processedOn,
     finishedOn,
-    activeJobCount,
+    activeJobCount: Math.max(0, activeJobCount), // Clamp display at 0
     timestamp: new Date().toISOString()
   };
   fs.appendFileSync(workerLogPath, JSON.stringify(entry) + '\n');
@@ -53,36 +57,52 @@ function logJob(jobId: string | undefined, status: string, latencyMs: number | n
 const worker = new Worker(
   QUEUE_NAME,
   async (job) => {
+    // In BullMQ v5, the worker.on('active') event is unreliable and drops events 
+    // for jobs picked up after the initial concurrency batch. 
+    // The processor function itself is the only 100% reliable place to hook "active" state.
+    if (job?.id && !activeJobIds.has(job.id)) {
+      activeJobIds.add(job.id);
+      activeJobCount++;
+    }
+
     console.log(`[Worker] Processing job ${job.id} with prompt: "${job.data.prompt}" using ${provider}`);
-    
-    // We purposefully do not catch errors here.
-    // Let exceptions bubble up for BullMQ to handle retries and exponential backoff.
     const result = await llmClient.complete(job.data.prompt);
-    
     console.log(`[Worker] Finished job ${job.id} in ${result.latencyMs}ms`);
     return result;
   },
   {
     connection: connection as any,
-    concurrency: concurrency
+    concurrency: concurrency,
+    lockDuration: 120000,   // 2 minutes (exceeds our 90s p99 latency)
+    lockRenewTime: 30000    // Renew lock every 30 seconds
   }
 );
 
 worker.on('ready', () => {
   console.log(`[Worker] Started and listening for jobs (Concurrency: ${concurrency})...`);
+  console.log(`[Worker] Listeners on 'completed': ${worker.listenerCount('completed')}`);
+  console.log(`[Worker] Listeners on 'failed': ${worker.listenerCount('failed')}`);
 });
 
-worker.on('active', (job) => {
-  activeJobCount++;
-});
+function handleJobCompletionOrFailure(jobId: string | undefined, eventName: string) {
+  console.log(`[DEBUG ${eventName}] typeof jobId=${typeof jobId}, value="${jobId}"`);
+  if (jobId && activeJobIds.has(jobId)) {
+    activeJobIds.delete(jobId);
+    activeJobCount--;
+  } else {
+    // Guard: Prevent the counter from going negative silently
+    console.error(`[Worker] activeJobCount went negative — duplicate listener suspected (Job ${jobId})`);
+    activeJobCount--; // Let it go negative internally to trigger the warning, but clamp in the log
+  }
+}
 
 worker.on('completed', (job, result) => {
-  activeJobCount--;
-  logJob(job.id, 'completed', result?.latencyMs || null, job.processedOn, job.finishedOn || Date.now());
+  handleJobCompletionOrFailure(job?.id, 'completed');
+  logJob(job?.id, 'completed', result?.latencyMs || null, job?.processedOn, job?.finishedOn || Date.now());
 });
 
 worker.on('failed', (job, err) => {
-  activeJobCount--;
+  handleJobCompletionOrFailure(job?.id, 'failed');
   console.error(`[Worker] Job ${job?.id} failed:`, err?.message);
   logJob(job?.id, 'failed', null, job?.processedOn, job?.finishedOn || Date.now());
 });

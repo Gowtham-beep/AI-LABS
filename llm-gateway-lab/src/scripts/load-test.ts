@@ -26,8 +26,10 @@ async function runLoadTest() {
   
   console.log(`Successfully queued ${jobIds.length} jobs.`);
 
-  // 2. Poll GET /infer/:jobId for each until completion or timeout (60 seconds)
-  const MAX_POLLS = 120; // 120 * 500ms = 60 seconds timeout
+  // 2. Poll GET /infer/:jobId for each until completion or timeout (10 minutes)
+  const MAX_POLLS = 1200; // 1200 * 500ms = 600 seconds (10 minutes) timeout
+  // Previously this was 60s, but that was far too aggressive because local LLM inference 
+  // (e.g., Ollama qwen2.5) can easily take 50-90s+ per job, especially when bottlenecked by concurrency.
   const pollPromises = jobIds.map(async (jobId) => {
     let polls = 0;
     while (polls < MAX_POLLS) {
@@ -41,7 +43,7 @@ async function runLoadTest() {
       await delay(500);
     }
     
-    console.warn(`\n[Timeout] Job ${jobId} did not finish within 60 seconds. Stopping polling.`);
+    console.warn(`\n[Timeout] Job ${jobId} did not finish within 10 minutes. Stopping polling.`);
     return { jobId, state: 'timeout', result: { latencyMs: null } };
   });
 
@@ -81,28 +83,37 @@ async function runLoadTest() {
     });
   });
   
-  // Calculate max concurrency based on overlapping job execution times
+  // Calculate max concurrency using a sweep-line algorithm.
+  // Why pairwise overlap-counting was wrong:
+  // The old approach counted "how many other jobs overlapped with this job at ANY point in its lifespan."
+  // It effectively counted overlapping pairs transitively across the whole batch. If one long job 
+  // overlapped with 10 fast jobs sequentially, it would log an inflated concurrency of 11 instead of 
+  // measuring how many were actually active at one specific instant.
   let maxConcurrency = 0;
+  let peakTime = 0;
+  let currentConcurrency = 0;
   
-  intervals.forEach(i1 => {
-    let currentOverlapping = 0;
-    intervals.forEach(i2 => {
-      // Logic for overlap: one interval starts before the other ends
-      // Exclude self-comparison
-      if (i1.id !== i2.id && i1.start < i2.end && i1.end > i2.start) {
-        currentOverlapping++;
-      }
-    });
-    // Add 1 to include the interval itself
-    currentOverlapping++;
-    if (currentOverlapping > maxConcurrency) {
-      maxConcurrency = currentOverlapping;
+  const events: { time: number; delta: number }[] = [];
+  intervals.forEach(i => {
+    events.push({ time: i.start, delta: 1 });
+    events.push({ time: i.end, delta: -1 });
+  });
+  
+  // Sort events by time ascending. If times exactly match, process decrements (-1) 
+  // before increments (+1) to prevent artificially inflating instantaneous peaks on job handoffs.
+  events.sort((a, b) => a.time === b.time ? a.delta - b.delta : a.time - b.time);
+  
+  events.forEach(event => {
+    currentConcurrency += event.delta;
+    if (currentConcurrency > maxConcurrency) {
+      maxConcurrency = currentConcurrency;
+      peakTime = event.time;
     }
   });
   
-  console.log(`\nMax Observed Concurrency: ${maxConcurrency}`);
-  console.log(`This indicates how many jobs ran truly in parallel.`);
-  console.log(`If WORKER_CONCURRENCY is ~5, you should see a max concurrency around 5.`);
+  console.log(`\nMax Observed Concurrency: ${maxConcurrency} (Peak occurred at timestamp: ${peakTime})`);
+  console.log(`This indicates the true instantaneous peak of jobs running in parallel.`);
+  console.log(`If WORKER_CONCURRENCY is ~5, you should see a max concurrency of exactly 5.`);
 
   // Write full results to JSON file
   const resultsDir = path.join(process.cwd(), 'results');
