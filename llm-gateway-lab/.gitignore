@@ -127,3 +127,4 @@ dist
 
 # Project Specific Build Output
 dist/
+results/

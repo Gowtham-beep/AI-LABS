@@ -1,14 +1,14 @@
 import { Queue } from 'bullmq';
 import { connection } from '../config/redis';
-import { InferJobData, InferJobResult } from '../types';
+import { InferenceJobData, InferenceJobResult } from '../types';
 
 export const QUEUE_NAME = 'llm-inference';
 
 // Create the Queue instance using our singleton Redis connection
-export const inferenceQueue = new Queue<InferJobData, InferJobResult, 'infer'>(QUEUE_NAME, {
+export const inferenceQueue = new Queue<InferenceJobData, InferenceJobResult, 'infer'>(QUEUE_NAME, {
   connection: connection as any
 });
 
-export async function addInferenceJob(data: InferJobData) {
+export async function addInferenceJob(data: InferenceJobData) {
   return await inferenceQueue.add('infer', data);
 }

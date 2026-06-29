@@ -1,11 +1,8 @@
-export interface InferRequest {
+export interface InferenceJobData {
   prompt: string;
 }
 
-export interface InferJobData {
-  prompt: string;
-}
-
-export interface InferJobResult {
+export interface InferenceJobResult {
   text: string;
+  latencyMs: number;
 }

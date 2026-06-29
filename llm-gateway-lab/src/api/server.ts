@@ -1,62 +1,60 @@
 import Fastify from 'fastify';
-import { addInferenceJob, inferenceQueue } from '../queue';
-import { InferRequest } from '../types';
+import { inferenceQueue } from '../queue';
 
-/**
- * Why API and worker are separate processes:
- * 
- * 1. Resource Isolation: LLM generation (even stubbed) or heavy queue processing can consume significant CPU and memory.
- *    Separating the worker ensures that the API server remains responsive to incoming HTTP requests (like health checks or new inference requests)
- *    even when workers are under heavy load.
- * 2. Scalability: We can scale API servers and worker processes independently. If we have a backlog of queue jobs,
- *    we can spin up more workers without over-provisioning API servers.
- * 3. Fault Tolerance: If a worker crashes due to a problematic job (e.g. out of memory), it does not bring down the API server,
- *    preventing disruption to users submitting new requests.
- */
-
-const server = Fastify({
-  logger: true
+const fastify = Fastify({
+  logger: true,
 });
 
-server.post<{ Body: InferRequest }>('/infer', async (request, reply) => {
-  const { prompt } = request.body;
+fastify.post('/infer', async (request, reply) => {
+  const { prompt } = request.body as { prompt: string };
   
   if (!prompt) {
-    return reply.status(400).send({ error: 'Prompt is required' });
+    return reply.status(400).send({ error: 'prompt is required' });
   }
 
-  // Add job to the queue and return the jobId immediately
-  const job = await addInferenceJob({ prompt });
+  // Add a job to the queue, configure retries and exponential backoff
+  const job = await inferenceQueue.add('infer', { prompt }, {
+    attempts: 3,
+    backoff: {
+      type: 'exponential',
+      delay: 1000
+    }
+  });
   
-  return reply.status(202).send({ jobId: job.id });
+  return { jobId: job.id };
 });
 
-server.get<{ Params: { jobId: string } }>('/infer/:jobId', async (request, reply) => {
-  const { jobId } = request.params;
+fastify.get('/infer/:jobId', async (request, reply) => {
+  const { jobId } = request.params as { jobId: string };
   
   const job = await inferenceQueue.getJob(jobId);
-  
   if (!job) {
     return reply.status(404).send({ error: 'Job not found' });
   }
-  
+
   const state = await job.getState();
-  
-  return reply.send({
-    jobId: job.id,
+  const result = job.returnvalue;
+  const failedReason = job.failedReason;
+  const processedOn = job.processedOn;
+  const finishedOn = job.finishedOn;
+
+  return {
+    jobId,
     state,
-    result: job.returnvalue || null,
-    failedReason: job.failedReason || null,
-  });
+    result: result || null,
+    error: failedReason || null,
+    processedOn,
+    finishedOn
+  };
 });
 
 const start = async () => {
   try {
     const port = parseInt(process.env.PORT || '3000', 10);
-    await server.listen({ port, host: '0.0.0.0' });
-    console.log(`API Server listening on port ${port}`);
+    await fastify.listen({ port, host: '0.0.0.0' });
+    console.log(`[API] Server is running on port ${port}`);
   } catch (err) {
-    server.log.error(err);
+    fastify.log.error(err);
     process.exit(1);
   }
 };
