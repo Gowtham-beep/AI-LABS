@@ -63,6 +63,9 @@ const worker = new Worker(
     if (job?.id && !activeJobIds.has(job.id)) {
       activeJobIds.add(job.id);
       activeJobCount++;
+      if (activeJobCount > concurrency) {
+        console.warn(`[Worker WARNING] activeJobCount (${activeJobCount}) exceeded WORKER_CONCURRENCY (${concurrency})!`);
+      }
     }
 
     console.log(`[Worker] Processing job ${job.id} with prompt: "${job.data.prompt}" using ${provider}`);
