@@ -27,12 +27,25 @@ fastify.post('/infer', async (request, reply) => {
 fastify.get('/infer/:jobId', async (request, reply) => {
   const { jobId } = request.params as { jobId: string };
   
-  const job = await inferenceQueue.getJob(jobId);
+  let job = await inferenceQueue.getJob(jobId);
   if (!job) {
     return reply.status(404).send({ error: 'Job not found' });
   }
 
-  const state = await job.getState();
+  let state = await job.getState();
+  
+  // BullMQ Known Behavior (Issue #1697): getJob() loads the job hash into memory, 
+  // while getState() performs a fresh Redis query. If the job finishes exactly between 
+  // these two operations, state will be "completed" but the in-memory job.returnvalue 
+  // will still be empty/stale. We must re-fetch to ensure data consistency.
+  if ((state === 'completed' && !job.returnvalue) || (state === 'failed' && !job.failedReason)) {
+    const refreshedJob = await inferenceQueue.getJob(jobId);
+    if (refreshedJob) {
+      job = refreshedJob;
+      state = await job.getState();
+    }
+  }
+
   const result = job.returnvalue;
   const failedReason = job.failedReason;
   const processedOn = job.processedOn;
