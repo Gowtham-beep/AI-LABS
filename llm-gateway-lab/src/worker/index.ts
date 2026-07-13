@@ -2,6 +2,7 @@ import { Worker } from 'bullmq';
 import { connection } from '../config/redis';
 import { QUEUE_NAME } from '../queue';
 import { getLLMClient } from '../llm';
+import { globalTokenBucket } from '../ratelimiter/tokenBucket';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -41,7 +42,7 @@ if (!fs.existsSync(logsDir)) {
 }
 const workerLogPath = path.join(logsDir, 'worker.log');
 
-function logJob(jobId: string | undefined, status: string, latencyMs: number | null, processedOn: number | undefined, finishedOn: number | undefined) {
+function logJob(jobId: string | undefined, status: string, latencyMs: number | null, processedOn: number | undefined, finishedOn: number | undefined, extra: any = {}) {
   const entry = {
     jobId,
     status,
@@ -49,6 +50,7 @@ function logJob(jobId: string | undefined, status: string, latencyMs: number | n
     processedOn,
     finishedOn,
     activeJobCount: Math.max(0, activeJobCount), // Clamp display at 0
+    ...extra,
     timestamp: new Date().toISOString()
   };
   fs.appendFileSync(workerLogPath, JSON.stringify(entry) + '\n');
@@ -70,8 +72,21 @@ const worker = new Worker(
 
     console.log(`[Worker] Processing job ${job.id} with prompt: "${job.data.prompt}" using ${provider}`);
     const result = await llmClient.complete(job.data.prompt);
+    
+    const estimatedCost = job.data.estimatedCost || 0;
+    const actualTokens = result.promptTokens + result.completionTokens;
+    
+    // We use a refund-then-consume pattern instead of consume(actualTokens - estimatedCost)
+    // because negative cost is possible when the model generates fewer tokens than estimated,
+    // and the Lua script does not handle negative cost values.
+    await globalTokenBucket.refund(estimatedCost);
+    await globalTokenBucket.consume(actualTokens);
+    
+    const drift = actualTokens - estimatedCost;
+    const bucketStatus = await globalTokenBucket.status();
+
     console.log(`[Worker] Finished job ${job.id} in ${result.latencyMs}ms`);
-    return result;
+    return { ...result, estimatedCost, actualTokens, drift, bucketStatus };
   },
   {
     connection: connection as any,
@@ -101,7 +116,12 @@ function handleJobCompletionOrFailure(jobId: string | undefined, eventName: stri
 
 worker.on('completed', (job, result) => {
   handleJobCompletionOrFailure(job?.id, 'completed');
-  logJob(job?.id, 'completed', result?.latencyMs || null, job?.processedOn, job?.finishedOn || Date.now());
+  logJob(job?.id, 'completed', result?.latencyMs || null, job?.processedOn, job?.finishedOn || Date.now(), {
+    estimatedCost: result?.estimatedCost,
+    actualTokens: result?.actualTokens,
+    drift: result?.drift,
+    bucketStatus: result?.bucketStatus
+  });
 });
 
 worker.on('failed', (job, err) => {

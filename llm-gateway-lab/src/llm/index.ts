@@ -8,7 +8,7 @@ import { Groq } from 'groq-sdk';
  * the rest of the application code. It ensures a consistent input/output contract.
  */
 export interface LLMClient {
-  complete(prompt: string): Promise<{ text: string; latencyMs: number }>;
+  complete(prompt: string): Promise<{ text: string; latencyMs: number; promptTokens: number; completionTokens: number }>;
 }
 
 export class GroqClient implements LLMClient {
@@ -18,7 +18,7 @@ export class GroqClient implements LLMClient {
     this.groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
   }
 
-  async complete(prompt: string): Promise<{ text: string; latencyMs: number }> {
+  async complete(prompt: string): Promise<{ text: string; latencyMs: number; promptTokens: number; completionTokens: number }> {
     const start = Date.now();
     const chatCompletion = await this.groq.chat.completions.create({
       messages: [{ role: 'user', content: prompt }],
@@ -28,13 +28,15 @@ export class GroqClient implements LLMClient {
     
     return {
       text: chatCompletion.choices[0]?.message?.content || '',
-      latencyMs
+      latencyMs,
+      promptTokens: 0,
+      completionTokens: 0
     };
   }
 }
 
 export class OllamaClient implements LLMClient {
-  async complete(prompt: string): Promise<{ text: string; latencyMs: number }> {
+  async complete(prompt: string): Promise<{ text: string; latencyMs: number; promptTokens: number; completionTokens: number }> {
     const start = Date.now();
     
     // Using native fetch to hit local Ollama
@@ -52,12 +54,14 @@ export class OllamaClient implements LLMClient {
       throw new Error(`Ollama error: ${response.statusText}`);
     }
     
-    const data = await response.json() as { response: string };
+    const data = await response.json() as { response: string; prompt_eval_count?: number; eval_count?: number };
     const latencyMs = Date.now() - start;
     
     return {
       text: data.response,
-      latencyMs
+      latencyMs,
+      promptTokens: data.prompt_eval_count || 0,
+      completionTokens: data.eval_count || 0
     };
   }
 }

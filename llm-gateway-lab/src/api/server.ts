@@ -1,5 +1,6 @@
 import Fastify from 'fastify';
 import { inferenceQueue } from '../queue';
+import { globalTokenBucket } from '../ratelimiter/tokenBucket';
 
 const fastify = Fastify({
   logger: true,
@@ -12,8 +13,22 @@ fastify.post('/infer', async (request, reply) => {
     return reply.status(400).send({ error: 'prompt is required' });
   }
 
+  // word count × 1.3 is a rough token approximation for pre-flight reservation — actual tokens settled post-flight in the worker
+  const estimatedCost = Math.ceil(prompt.split(' ').length * 1.3);
+  const { allowed, retryAfterMs } = await globalTokenBucket.consume(estimatedCost);
+
+  if (!allowed) {
+    const delay = retryAfterMs || 0;
+    reply.header('Retry-After', String(Math.ceil(delay / 1000)));
+    return reply.status(429).send({
+      error: 'Rate limit exceeded',
+      retryAfterMs: delay,
+      message: 'Token budget exhausted. Retry after the specified delay.'
+    });
+  }
+
   // Add a job to the queue, configure retries and exponential backoff
-  const job = await inferenceQueue.add('infer', { prompt }, {
+  const job = await inferenceQueue.add('infer', { prompt, estimatedCost }, {
     attempts: 3,
     backoff: {
       type: 'exponential',
