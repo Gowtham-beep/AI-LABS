@@ -124,8 +124,23 @@ worker.on('completed', (job, result) => {
   });
 });
 
-worker.on('failed', (job, err) => {
+worker.on('failed', async (job, err) => {
   handleJobCompletionOrFailure(job?.id, 'failed');
   console.error(`[Worker] Job ${job?.id} failed:`, err?.message);
-  logJob(job?.id, 'failed', null, job?.processedOn, job?.finishedOn || Date.now());
+  
+  const estimatedCost = job?.data?.estimatedCost;
+  if (estimatedCost !== undefined) {
+    await globalTokenBucket.refund(estimatedCost);
+    console.log(`[Worker] Refunded estimatedCost tokens for failed job ${job?.id}`);
+  }
+  
+  const bucketStatus = await globalTokenBucket.status();
+
+  logJob(job?.id, 'failed', null, job?.processedOn, job?.finishedOn || Date.now(), {
+    estimatedCost: estimatedCost || 0,
+    actualTokens: null,
+    drift: null,
+    refunded: true,
+    bucketStatus: bucketStatus
+  });
 });

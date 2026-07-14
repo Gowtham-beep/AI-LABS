@@ -126,5 +126,9 @@ return 1
   }
 }
 
-// Export single instance based on instructions
-export const globalTokenBucket = new TokenBucket('llm:tpm:global', 200, 500);
+// Calibrated to local Ollama hardware (~5 tok/sec generation speed)
+// 30 TPM refill = 0.5 tok/sec = 1/10th of generation capacity
+// Creates observable burst window: ~80 token job causes ~160s lockout
+// This mirrors the structural behavior of Groq's 6000 TPM free tier
+// against a model serving at ~600 tok/sec (same 1/20th ratio)
+export const globalTokenBucket = new TokenBucket('llm:tpm:global', 50, 30);
