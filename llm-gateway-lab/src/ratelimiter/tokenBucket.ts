@@ -131,4 +131,4 @@ return 1
 // Creates observable burst window: ~80 token job causes ~160s lockout
 // This mirrors the structural behavior of Groq's 6000 TPM free tier
 // against a model serving at ~600 tok/sec (same 1/20th ratio)
-export const globalTokenBucket = new TokenBucket('llm:tpm:global', 50, 30);
+export const globalTokenBucket = new TokenBucket('llm:tpm:global', 350, 30);

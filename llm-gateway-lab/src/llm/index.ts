@@ -44,6 +44,7 @@ export class OllamaClient implements LLMClient {
     // bounded and predictable for rate limiting — this is the same mechanism as 
     // OpenAI's max_tokens parameter
     // Using native fetch to hit local Ollama
+    console.log(`[OllamaClient] Sending request with options: { num_predict: ${maxOutputTokens} } (typeof maxOutputTokens: ${typeof maxOutputTokens})`);
     const response = await fetch('http://localhost:11434/api/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

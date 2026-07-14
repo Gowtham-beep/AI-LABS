@@ -17,7 +17,11 @@ fastify.post('/infer', async (request, reply) => {
   // num_predict guarantees actual output tokens never exceed MAX_OUTPUT_TOKENS, 
   // so this reservation can never be insufficient, only excessive
   const MAX_OUTPUT_TOKENS = 150;
-  const estimatedInputTokens = Math.ceil(prompt.split(' ').length * 1.3);
+  // A conservative flat approach for input estimation: guarantees at least 50 tokens
+  // reserved for input regardless of prompt length (covering template overhead)
+  // while still scaling up for genuinely long prompts.
+  const wordCount = prompt.split(' ').length;
+  const estimatedInputTokens = Math.max(50, Math.ceil(wordCount * 2));
   const reservedCost = estimatedInputTokens + MAX_OUTPUT_TOKENS;
   const { allowed, retryAfterMs } = await globalTokenBucket.consume(reservedCost);
 

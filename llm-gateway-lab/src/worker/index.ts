@@ -80,16 +80,25 @@ const worker = new Worker(
     if (unused > 0) {
       await globalTokenBucket.refund(unused);
     } else if (unused < 0) {
-      // Should never happen if num_predict is respected — log if it does,
-      // this would indicate Ollama exceeded the cap
-      console.error(`[Worker] WARNING: actualTokens (${actualTokens}) exceeded reservedCost (${reservedCost}) — num_predict cap was not respected`);
+      if (result.completionTokens > (job.data.maxOutputTokens || 0)) {
+        console.error(`[Worker] WARNING: Output cap violated! completionTokens (${result.completionTokens}) exceeded maxOutputTokens (${job.data.maxOutputTokens}).`);
+      } else {
+        console.warn(`[Worker] Input estimation drift: promptTokens (${result.promptTokens}) exceeded estimatedInputTokens (${job.data.estimatedInputTokens}).`);
+      }
       await globalTokenBucket.consume(Math.abs(unused));
     }
     
     const bucketStatus = await globalTokenBucket.status();
 
     console.log(`[Worker] Finished job ${job.id} in ${result.latencyMs}ms`);
-    return { ...result, reservedCost, actualTokens, unused, capRespected: actualTokens <= reservedCost, bucketStatus };
+    return { 
+      ...result, 
+      reservedCost, 
+      actualTokens, 
+      unused, 
+      capRespected: result.completionTokens <= (job.data.maxOutputTokens || 0), 
+      bucketStatus 
+    };
   },
   {
     connection: connection as any,
@@ -122,6 +131,8 @@ worker.on('completed', (job, result) => {
   logJob(job?.id, 'completed', result?.latencyMs || null, job?.processedOn, job?.finishedOn || Date.now(), {
     reservedCost: result?.reservedCost,
     actualTokens: result?.actualTokens,
+    promptTokens: result?.promptTokens,
+    completionTokens: result?.completionTokens,
     unused: result?.unused,
     capRespected: result?.capRespected,
     bucketStatus: result?.bucketStatus
