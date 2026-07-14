@@ -23,6 +23,16 @@ fastify.post('/infer', async (request, reply) => {
   const wordCount = prompt.split(' ').length;
   const estimatedInputTokens = Math.max(50, Math.ceil(wordCount * 2));
   const reservedCost = estimatedInputTokens + MAX_OUTPUT_TOKENS;
+
+  if (reservedCost > globalTokenBucket.maxTokens) {
+    return reply.status(400).send({
+      error: 'Prompt too large',
+      message: `This request requires ${reservedCost} tokens, which exceeds the maximum possible bucket capacity of ${globalTokenBucket.maxTokens}. This request can never be served under the current rate limit configuration — try a shorter prompt.`,
+      reservedCost,
+      maxPossible: globalTokenBucket.maxTokens
+    });
+  }
+
   const { allowed, retryAfterMs } = await globalTokenBucket.consume(reservedCost);
 
   if (!allowed) {

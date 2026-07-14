@@ -2,7 +2,7 @@ import { connection as redis } from '../config/redis';
 
 export class TokenBucket {
   private bucketKey: string;
-  private maxTokens: number;
+  public maxTokens: number;
   private refillRatePerMinute: number;
 
   constructor(bucketKey: string, maxTokens: number, refillRatePerMinute: number) {
@@ -131,4 +131,4 @@ return 1
 // Creates observable burst window: ~80 token job causes ~160s lockout
 // This mirrors the structural behavior of Groq's 6000 TPM free tier
 // against a model serving at ~600 tok/sec (same 1/20th ratio)
-export const globalTokenBucket = new TokenBucket('llm:tpm:global', 350, 30);
+export const globalTokenBucket = new TokenBucket('llm:tpm:global', 500, 30);
