@@ -71,22 +71,25 @@ const worker = new Worker(
     }
 
     console.log(`[Worker] Processing job ${job.id} with prompt: "${job.data.prompt}" using ${provider}`);
-    const result = await llmClient.complete(job.data.prompt);
+    const result = await llmClient.complete(job.data.prompt, job.data.maxOutputTokens);
     
-    const estimatedCost = job.data.estimatedCost || 0;
+    const reservedCost = (job.data.estimatedInputTokens || 0) + (job.data.maxOutputTokens || 0);
     const actualTokens = result.promptTokens + result.completionTokens;
+    const unused = reservedCost - actualTokens;
     
-    // We use a refund-then-consume pattern instead of consume(actualTokens - estimatedCost)
-    // because negative cost is possible when the model generates fewer tokens than estimated,
-    // and the Lua script does not handle negative cost values.
-    await globalTokenBucket.refund(estimatedCost);
-    await globalTokenBucket.consume(actualTokens);
+    if (unused > 0) {
+      await globalTokenBucket.refund(unused);
+    } else if (unused < 0) {
+      // Should never happen if num_predict is respected — log if it does,
+      // this would indicate Ollama exceeded the cap
+      console.error(`[Worker] WARNING: actualTokens (${actualTokens}) exceeded reservedCost (${reservedCost}) — num_predict cap was not respected`);
+      await globalTokenBucket.consume(Math.abs(unused));
+    }
     
-    const drift = actualTokens - estimatedCost;
     const bucketStatus = await globalTokenBucket.status();
 
     console.log(`[Worker] Finished job ${job.id} in ${result.latencyMs}ms`);
-    return { ...result, estimatedCost, actualTokens, drift, bucketStatus };
+    return { ...result, reservedCost, actualTokens, unused, capRespected: actualTokens <= reservedCost, bucketStatus };
   },
   {
     connection: connection as any,
@@ -117,9 +120,10 @@ function handleJobCompletionOrFailure(jobId: string | undefined, eventName: stri
 worker.on('completed', (job, result) => {
   handleJobCompletionOrFailure(job?.id, 'completed');
   logJob(job?.id, 'completed', result?.latencyMs || null, job?.processedOn, job?.finishedOn || Date.now(), {
-    estimatedCost: result?.estimatedCost,
+    reservedCost: result?.reservedCost,
     actualTokens: result?.actualTokens,
-    drift: result?.drift,
+    unused: result?.unused,
+    capRespected: result?.capRespected,
     bucketStatus: result?.bucketStatus
   });
 });
@@ -128,18 +132,21 @@ worker.on('failed', async (job, err) => {
   handleJobCompletionOrFailure(job?.id, 'failed');
   console.error(`[Worker] Job ${job?.id} failed:`, err?.message);
   
-  const estimatedCost = job?.data?.estimatedCost;
-  if (estimatedCost !== undefined) {
-    await globalTokenBucket.refund(estimatedCost);
-    console.log(`[Worker] Refunded estimatedCost tokens for failed job ${job?.id}`);
+  const estimatedInputTokens = job?.data?.estimatedInputTokens;
+  const maxOutputTokens = job?.data?.maxOutputTokens;
+  
+  if (estimatedInputTokens !== undefined && maxOutputTokens !== undefined) {
+    const reservedCost = estimatedInputTokens + maxOutputTokens;
+    await globalTokenBucket.refund(reservedCost);
+    console.log(`[Worker] Refunded reservedCost (${reservedCost}) tokens for failed job ${job?.id}`);
   }
   
   const bucketStatus = await globalTokenBucket.status();
 
   logJob(job?.id, 'failed', null, job?.processedOn, job?.finishedOn || Date.now(), {
-    estimatedCost: estimatedCost || 0,
+    reservedCost: (estimatedInputTokens || 0) + (maxOutputTokens || 0),
     actualTokens: null,
-    drift: null,
+    unused: null,
     refunded: true,
     bucketStatus: bucketStatus
   });

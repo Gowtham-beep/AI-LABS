@@ -8,7 +8,7 @@ import { Groq } from 'groq-sdk';
  * the rest of the application code. It ensures a consistent input/output contract.
  */
 export interface LLMClient {
-  complete(prompt: string): Promise<{ text: string; latencyMs: number; promptTokens: number; completionTokens: number }>;
+  complete(prompt: string, maxOutputTokens?: number): Promise<{ text: string; latencyMs: number; promptTokens: number; completionTokens: number }>;
 }
 
 export class GroqClient implements LLMClient {
@@ -18,11 +18,12 @@ export class GroqClient implements LLMClient {
     this.groq = new Groq({ apiKey: process.env.GROQ_API_KEY });
   }
 
-  async complete(prompt: string): Promise<{ text: string; latencyMs: number; promptTokens: number; completionTokens: number }> {
+  async complete(prompt: string, maxOutputTokens: number = 150): Promise<{ text: string; latencyMs: number; promptTokens: number; completionTokens: number }> {
     const start = Date.now();
     const chatCompletion = await this.groq.chat.completions.create({
       messages: [{ role: 'user', content: prompt }],
       model: 'llama-3.1-8b-instant',
+      max_tokens: maxOutputTokens
     });
     const latencyMs = Date.now() - start;
     
@@ -36,9 +37,12 @@ export class GroqClient implements LLMClient {
 }
 
 export class OllamaClient implements LLMClient {
-  async complete(prompt: string): Promise<{ text: string; latencyMs: number; promptTokens: number; completionTokens: number }> {
+  async complete(prompt: string, maxOutputTokens: number = 150): Promise<{ text: string; latencyMs: number; promptTokens: number; completionTokens: number }> {
     const start = Date.now();
     
+    // num_predict caps generation length, making output token count 
+    // bounded and predictable for rate limiting — this is the same mechanism as 
+    // OpenAI's max_tokens parameter
     // Using native fetch to hit local Ollama
     const response = await fetch('http://localhost:11434/api/generate', {
       method: 'POST',
@@ -46,7 +50,8 @@ export class OllamaClient implements LLMClient {
       body: JSON.stringify({
         model: 'qwen2.5-coder',
         prompt,
-        stream: false
+        stream: false,
+        options: { num_predict: maxOutputTokens }
       })
     });
 

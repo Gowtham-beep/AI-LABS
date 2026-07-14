@@ -13,9 +13,13 @@ fastify.post('/infer', async (request, reply) => {
     return reply.status(400).send({ error: 'prompt is required' });
   }
 
-  // word count × 1.3 is a rough token approximation for pre-flight reservation — actual tokens settled post-flight in the worker
-  const estimatedCost = Math.ceil(prompt.split(' ').length * 1.3);
-  const { allowed, retryAfterMs } = await globalTokenBucket.consume(estimatedCost);
+  // reservedCost is a hard ceiling, not an estimate — 
+  // num_predict guarantees actual output tokens never exceed MAX_OUTPUT_TOKENS, 
+  // so this reservation can never be insufficient, only excessive
+  const MAX_OUTPUT_TOKENS = 150;
+  const estimatedInputTokens = Math.ceil(prompt.split(' ').length * 1.3);
+  const reservedCost = estimatedInputTokens + MAX_OUTPUT_TOKENS;
+  const { allowed, retryAfterMs } = await globalTokenBucket.consume(reservedCost);
 
   if (!allowed) {
     const delay = retryAfterMs || 0;
@@ -28,7 +32,11 @@ fastify.post('/infer', async (request, reply) => {
   }
 
   // Add a job to the queue, configure retries and exponential backoff
-  const job = await inferenceQueue.add('infer', { prompt, estimatedCost }, {
+  const job = await inferenceQueue.add('infer', { 
+    prompt, 
+    estimatedInputTokens, 
+    maxOutputTokens: MAX_OUTPUT_TOKENS 
+  }, {
     attempts: 3,
     backoff: {
       type: 'exponential',

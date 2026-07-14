@@ -1,6 +1,7 @@
 export interface InferenceJobData {
   prompt: string;
-  estimatedCost?: number;
+  estimatedInputTokens?: number;
+  maxOutputTokens?: number;
 }
 
 export interface InferenceJobResult {

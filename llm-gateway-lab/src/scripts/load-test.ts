@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-const API_URL = 'http://localhost:3000';
+const API_URL = `http://localhost:${process.env.PORT || 5000}`;
 
 async function delay(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -13,18 +13,38 @@ async function runLoadTest() {
   const numRequests = 30;
 
   // 1. Fire 30 POST requests
-  const postPromises = Array.from({ length: numRequests }).map((_, i) =>
-    fetch(`${API_URL}/infer`, {
+  const postPromises = Array.from({ length: numRequests }).map(async (_, i) => {
+    const r = await fetch(`${API_URL}/infer`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ prompt: `Count from 1 to 5, test ${i + 1}` })
-    }).then(r => r.json())
-  );
+    });
+    
+    const text = await r.text();
+    let data: any;
+    try {
+      data = JSON.parse(text);
+    } catch(err) {
+      return { state: 'error', error: text.slice(0, 200), status: r.status };
+    }
 
-  const responses = await Promise.all(postPromises) as { jobId: string }[];
-  const jobIds = responses.map(r => r.jobId);
+    if (r.status === 429) {
+      return { state: 'rate_limited', retryAfterMs: data.retryAfterMs };
+    } else if (r.ok) {
+      return { state: 'queued', jobId: data.jobId };
+    } else {
+      return { state: 'error', error: data, status: r.status };
+    }
+  });
+
+  const postResults = await Promise.all(postPromises);
+  const rateLimited = postResults.filter((r: any) => r.state === 'rate_limited');
+  const queuedJobs = postResults.filter((r: any) => r.state === 'queued');
+  const errorJobs = postResults.filter((r: any) => r.state === 'error');
   
-  console.log(`Successfully queued ${jobIds.length} jobs.`);
+  const jobIds = queuedJobs.map((r: any) => r.jobId as string);
+  
+  console.log(`Queued: ${jobIds.length} | Rate Limited: ${rateLimited.length} | Errors: ${errorJobs.length}`);
 
   // 2. Poll GET /infer/:jobId for each until completion or timeout (10 minutes)
   const MAX_POLLS = 1200; // 1200 * 500ms = 600 seconds (10 minutes) timeout
@@ -56,9 +76,16 @@ async function runLoadTest() {
   
   const intervals: { id: string, start: number, end: number }[] = [];
   const reportJobs: any[] = [];
+  let jobsCompleted = 0;
+  let jobsTimedOut = 0;
+  let jobsFailed = 0;
 
   completedJobs.forEach((job: any) => {
     const state = job.state;
+    if (state === 'completed') jobsCompleted++;
+    else if (state === 'timeout') jobsTimedOut++;
+    else if (state === 'failed') jobsFailed++;
+    
     const latencyMs = job.result?.latencyMs;
     const processedOn = job.processedOn;
     const finishedOn = job.finishedOn;
@@ -128,10 +155,21 @@ async function runLoadTest() {
     summary: {
       totalWallClockMs: totalWallClock,
       maxConcurrency,
-      jobsCompleted: reportJobs.length
+      jobsQueued: jobIds.length,
+      jobsCompleted,
+      jobsTimedOut,
+      jobsFailed,
+      jobsRateLimited: rateLimited.length,
+      errors: errorJobs.length
     },
-    jobs: reportJobs
+    jobs: {
+      processed: reportJobs,
+      rateLimited: rateLimited,
+      errors: errorJobs
+    }
   };
+
+  console.log(`\nSummary: Completed=${jobsCompleted}, RateLimited=${rateLimited.length}, TimedOut=${jobsTimedOut}, Failed=${jobsFailed}, Errors=${errorJobs.length}`);
 
   fs.writeFileSync(reportPath, JSON.stringify(reportData, null, 2));
   console.log(`\nReport written to: ${reportPath}`);
