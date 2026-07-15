@@ -2,10 +2,6 @@ import * as fs from 'fs';
 const API_URL = 'http://localhost:5000/infer';
 
 const prompts = [
-  "Count from one to five",
-  "Write a short poem about a very lazy orange cat",
-  "This is a twenty word prompt designed to test whether the token estimation logic properly handles medium length text inputs",
-  "I am writing a slightly longer prompt to see how the system handles forty words. It is crucial to evaluate the token estimator across different length brackets to ensure the bucket reserves enough capacity and does not go negative unexpectedly.",
   "The architecture of modern web applications often involves a microservices approach where individual components are developed and deployed independently. This paradigm provides flexibility in scaling and updating distinct features without disrupting the entire system. In our scenario, separating the API server from the worker process ensures that long-running inferences do not block incoming HTTP requests. The API server quickly parses the prompt, estimates the token usage, checks the rate limit via Redis, and if allowed, pushes the task to a message queue. The worker then dequeues tasks, calls the language model, and precisely refunds any unused tokens back to the rate limit bucket, keeping everything perfectly synchronized.",
   "This is a massive prompt to test the HTTP 400 constraint. ".repeat(25)
 ];
